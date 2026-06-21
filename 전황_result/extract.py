@@ -15,7 +15,6 @@ import json
 import re
 import time
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from openai import OpenAI
 
@@ -178,7 +177,6 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--force", action="store_true", help="캐시 무시하고 전체 재추출")
     parser.add_argument("--limit", type=int, default=None, help="테스트용: 처음 N개 파일만 처리")
-    parser.add_argument("--workers", type=int, default=5, help="동시 LLM 호출 수")
     args = parser.parse_args()
 
     env = load_env(ENV_PATH)
@@ -199,24 +197,16 @@ def main():
     if args.limit:
         targets = targets[: args.limit]
 
-    print(f"총 {len(targets)}개 파일 처리 시작 (model={model}, workers={args.workers})")
+    print(f"총 {len(targets)}개 파일 순차 처리 시작 (model={model})")
 
     results_map = {}
-    with ThreadPoolExecutor(max_workers=args.workers) as pool:
-        futures = {
-            pool.submit(process_file, client, model, relpath, path, args.force): relpath
-            for relpath, path in targets
-        }
-        done = 0
-        for fut in as_completed(futures):
-            relpath = futures[fut]
-            done += 1
-            try:
-                results_map[relpath] = fut.result()
-            except Exception as e:
-                print(f"  [실패] {relpath}: {e}")
-                results_map[relpath] = {k: [] for k in CATEGORY_KEYS}
-            print(f"[{done}/{len(targets)}] {relpath}")
+    for done, (relpath, path) in enumerate(targets, start=1):
+        try:
+            results_map[relpath] = process_file(client, model, relpath, path, args.force)
+        except Exception as e:
+            print(f"  [실패] {relpath}: {e}")
+            results_map[relpath] = {k: [] for k in CATEGORY_KEYS}
+        print(f"[{done}/{len(targets)}] {relpath}")
 
     ordered_results = [(relpath, results_map[relpath]) for relpath, _ in targets]
     markdown = build_markdown(ordered_results)
