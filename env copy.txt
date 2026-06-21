@@ -1,0 +1,13 @@
+OPENAI_API_KEY=sk
+LLM_MODEL=gpt-4o
+OCR_MODEL=gpt-4o
+LLM_BASE_URL=
+VISION_MODEL=gpt-4o
+VISION_BASE_URL=
+EMBEDDING_BASE_URL=
+EMBEDDING_MODEL=text-embedding-ada-002
+# PDF -> markdown reader: "text" (pymupdf4llm) or "vision" (vision LLM via VISION_MODEL).
+PDF_EXTRACT_MODE=text
+# Max parallel LLM calls GraphRAG fires during indexing (library default 25; lower for
+# self-hosted servers without continuous batching).
+GRAPHRAG_CONCURRENT_REQUESTS=4
