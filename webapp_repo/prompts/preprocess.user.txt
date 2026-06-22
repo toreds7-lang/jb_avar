@@ -1,0 +1,5 @@
+Segments:
+
+{segments}
+
+Classify every segment above as "keep" or "drop". Return JSON only.

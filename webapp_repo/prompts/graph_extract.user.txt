@@ -1,0 +1,9 @@
+Source: {source_label}
+
+=== Source Text ===
+{text}
+=== End Source Text ===
+
+Extract concepts, entities, and relationships from this text segment.
+Focus on what is central to the source's content.
+Return JSON only.

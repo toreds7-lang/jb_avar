@@ -1,0 +1,9 @@
+=== Full source text ({label}) ===
+{text}
+=== End source text ===
+
+=== Recent conversation ===
+{history}
+=== End conversation ===
+
+Question: {question}

@@ -1,0 +1,11 @@
+{scope_note}
+
+=== Source excerpts ===
+{context}
+=== End excerpts ===
+
+=== Recent conversation ===
+{history}
+=== End conversation ===
+
+Question: {question}

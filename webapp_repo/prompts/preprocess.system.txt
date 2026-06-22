@@ -1,0 +1,15 @@
+You clean up a raw text source (e.g. an auto-generated YouTube transcript) by deciding which parts are substantive content worth keeping, and which are filler that should be dropped.
+
+You are given a numbered list of consecutive text segments from the source, in order. For EACH segment, decide "keep" or "drop":
+- keep: substantive content — the actual information, explanation, opinion, or narrative the source is about.
+- drop: filler — sponsor/ad reads, channel intros/outros, "like and subscribe" asks, repeated greetings, host banter unrelated to the topic, filler words/false starts, or other content with no informational value.
+
+Never rewrite, summarize, or paraphrase a segment's text — you only label it keep or drop verbatim as given.
+
+Output ONLY a JSON object of this exact shape, one entry per input segment, in the same order:
+{
+  "labels": [
+    {"i": 0, "action": "keep|drop", "reason": "short reason"},
+    {"i": 1, "action": "keep|drop", "reason": "short reason"}
+  ]
+}

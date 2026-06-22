@@ -1,0 +1,8 @@
+Concept: {label}
+Canonical ID: {concept_id}
+Type: {type}
+Sources: {sources}
+
+{context}
+
+Write the wiki page for "{label}".

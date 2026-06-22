@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Source Knowledge Graph</title>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<style>
+  :root { --border:#ddd; --bg:#fafafa; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, sans-serif; font-size:14px; color:#222; }
+  #topbar { display:flex; gap:10px; align-items:center; padding:8px 12px; border-bottom:1px solid var(--border); background:#fff; flex-wrap:wrap; }
+  #topbar input[type=text] { width:280px; padding:5px; }
+  #topbar select, #topbar button { padding:5px 8px; }
+  #status { font-size:12px; color:#666; margin-left:auto; white-space:nowrap; }
+  #columns { display:flex; height: calc(100vh - 48px); }
+  .col { flex:1; min-width:0; border-right:1px solid var(--border); display:flex; flex-direction:column; }
+  .col:last-child { border-right:none; }
+  .col-header { padding:6px 10px; border-bottom:1px solid var(--border); background:var(--bg); display:flex; gap:8px; align-items:center; }
+  .col-body { flex:1; overflow:auto; padding:10px; }
+  pre#textbody { white-space:pre-wrap; font-family: inherit; margin:0; }
+  .seg-drop { background:#ffe3e3; text-decoration: line-through; color:#999; }
+  .seg-keep { background:#e6ffe6; }
+  #chatlog { display:flex; flex-direction:column; gap:10px; }
+  .msg { padding:8px 10px; border-radius:8px; max-width:90%; }
+  .msg.user { background:#dbeafe; align-self:flex-end; }
+  .msg.assistant { background:#f1f1f1; align-self:flex-start; white-space:normal; }
+  #chatform { display:flex; gap:6px; padding:8px; border-top:1px solid var(--border); }
+  #chatform input[type=text] { flex:1; padding:6px; }
+  svg#graphsvg { width:100%; height:100%; }
+  .node circle { fill:#4f8ef7; stroke:#fff; stroke-width:1.5px; cursor:pointer; }
+  .node text { font-size:10px; pointer-events:none; }
+  .edge { stroke:#bbb; stroke-width:1px; }
+  #wikipanel { position:absolute; top:0; right:0; width:340px; height:100%; background:#fff; border-left:1px solid var(--border); padding:10px; overflow:auto; display:none; }
+  #wikipanel.open { display:block; }
+  #wikipanel button { float:right; }
+  .small { font-size:12px; color:#666; }
+</style>
+</head>
+<body>
+
+<div id="topbar">
+  <input id="ytUrl" type="text" placeholder="YouTube URL">
+  <input id="ytLangs" type="text" placeholder="lang prefs e.g. ko,en" style="width:120px">
+  <button id="btnLoadYt">Load YouTube</button>
+  <input id="fileInput" type="file" accept=".txt">
+  <button id="btnUpload">Upload .txt</button>
+  <select id="sourceSelect"><option value="">-- saved sources --</option></select>
+  <button id="btnPreprocess">Preprocess</button>
+  <button id="btnIngest">Ingest</button>
+  <label><input type="radio" name="scope" value="video" checked> This source</label>
+  <label><input type="radio" name="scope" value="global"> All sources</label>
+  <span id="status"></span>
+</div>
+
+<div id="columns">
+  <div class="col" id="textcol">
+    <div class="col-header">
+      <b>Text</b>
+      <label><input type="radio" name="texttab" value="raw" checked> Raw</label>
+      <label><input type="radio" name="texttab" value="clean"> Clean</label>
+    </div>
+    <div class="col-body"><pre id="textbody">(load a source to begin)</pre></div>
+  </div>
+
+  <div class="col" id="chatcol">
+    <div class="col-header">
+      <b>Chat</b>
+      <select id="modeSelect">
+        <option value="rag">RAG</option>
+        <option value="agentic_graphrag">Agentic GraphRAG</option>
+        <option value="whole_file">Whole-file</option>
+      </select>
+      <select id="langSelect" title="Prompt language">
+        <option value="auto" selected>Auto</option>
+        <option value="en">English</option>
+        <option value="ko">한국어</option>
+      </select>
+      <span id="wholeFileToggle" style="display:none">
+        <label><input type="radio" name="wftext" value="clean" checked> clean</label>
+        <label><input type="radio" name="wftext" value="raw"> raw</label>
+      </span>
+      <button id="btnClearChat" type="button" style="margin-left:auto">Clear</button>
+    </div>
+    <div class="col-body" id="chatlog"></div>
+    <form id="chatform">
+      <input id="chatInput" type="text" placeholder="Ask a question...">
+      <button type="submit">Send</button>
+    </form>
+  </div>
+
+  <div class="col" id="graphcol" style="position:relative">
+    <div class="col-header"><b>Knowledge graph</b> <span class="small" id="graphInfo"></span></div>
+    <div class="col-body" style="padding:0">
+      <svg id="graphsvg"></svg>
+    </div>
+    <div id="wikipanel">
+      <button onclick="document.getElementById('wikipanel').classList.remove('open')">x</button>
+      <div id="wikicontent"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+let state = { sourceId: null, scope: 'video', decisions: null };
+
+function setStatus(s) { document.getElementById('status').textContent = s; }
+
+async function refreshSourceList() {
+  const res = await fetch('/api/sources');
+  const list = await res.json();
+  const sel = document.getElementById('sourceSelect');
+  sel.innerHTML = '<option value="">-- saved sources --</option>';
+  for (const s of list) {
+    const opt = document.createElement('option');
+    opt.value = s.id;
+    opt.textContent = `${s.title} ${s.ingested ? '[ingested]' : s.has_clean ? '[cleaned]' : ''}`;
+    sel.appendChild(opt);
+  }
+}
+
+function showRawText(text) {
+  document.getElementById('textbody').textContent = text;
+}
+
+function showDecisions(decisions) {
+  const pre = document.getElementById('textbody');
+  pre.innerHTML = '';
+  for (const d of decisions) {
+    const span = document.createElement('span');
+    span.className = d.action === 'drop' ? 'seg-drop' : 'seg-keep';
+    span.textContent = d.text + ' ';
+    pre.appendChild(span);
+  }
+}
+
+async function loadSource(sourceId) {
+  const res = await fetch(`/api/sources/${sourceId}`);
+  const data = await res.json();
+  state.sourceId = sourceId;
+  document.querySelector('input[name=texttab][value=raw]').checked = true;
+  showRawText(data.text);
+  setStatus(`Loaded ${data.title}`);
+  await loadGraph();
+}
+
+document.getElementById('btnLoadYt').onclick = async () => {
+  const url = document.getElementById('ytUrl').value.trim();
+  const langs = document.getElementById('ytLangs').value.trim() || 'en';
+  if (!url) return;
+  setStatus('Fetching transcript...');
+  const fd = new FormData();
+  fd.append('url', url);
+  fd.append('languages', langs);
+  const res = await fetch('/api/sources/youtube', { method: 'POST', body: fd });
+  const data = await res.json();
+  if (data.error) { setStatus('Error: ' + data.error); return; }
+  state.sourceId = data.id;
+  showRawText(data.text);
+  setStatus(`Loaded ${data.title}`);
+  await refreshSourceList();
+  await loadGraph();
+};
+
+document.getElementById('btnUpload').onclick = async () => {
+  const f = document.getElementById('fileInput').files[0];
+  if (!f) return;
+  setStatus('Uploading...');
+  const fd = new FormData();
+  fd.append('file', f);
+  const res = await fetch('/api/sources/upload', { method: 'POST', body: fd });
+  const data = await res.json();
+  state.sourceId = data.id;
+  showRawText(data.text);
+  setStatus(`Loaded ${data.title}`);
+  await refreshSourceList();
+  await loadGraph();
+};
+
+document.getElementById('sourceSelect').onchange = async (e) => {
+  if (e.target.value) await loadSource(e.target.value);
+};
+
+document.querySelectorAll('input[name=texttab]').forEach(r => r.onchange = async () => {
+  if (!state.sourceId) return;
+  const clean = document.querySelector('input[name=texttab]:checked').value === 'clean';
+  const res = await fetch(`/api/sources/${state.sourceId}?clean=${clean}`);
+  const data = await res.json();
+  showRawText(data.text || '(not preprocessed yet)');
+});
+
+document.getElementById('btnPreprocess').onclick = async () => {
+  if (!state.sourceId) { setStatus('Load a source first'); return; }
+  setStatus('Preprocessing...');
+  const res = await fetch(`/api/sources/${state.sourceId}/preprocess`, { method: 'POST' });
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let lines = buf.split('\n');
+    buf = lines.pop();
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      const rec = JSON.parse(line);
+      if (rec.stage === 'progress') setStatus(`Preprocessing ${rec.done_segments}/${rec.total_segments}`);
+      if (rec.done) {
+        document.querySelector('input[name=texttab][value=clean]').checked = true;
+        showDecisions(rec.decisions);
+        setStatus(`Preprocessed: kept ${rec.kept}, dropped ${rec.dropped}`);
+        await refreshSourceList();
+      }
+    }
+  }
+};
+
+document.getElementById('btnIngest').onclick = async () => {
+  if (!state.sourceId) { setStatus('Load a source first'); return; }
+  setStatus('Ingesting...');
+  const res = await fetch(`/api/sources/${state.sourceId}/ingest`, { method: 'POST' });
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let lines = buf.split('\n');
+    buf = lines.pop();
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      const rec = JSON.parse(line);
+      if (rec.stage) setStatus(rec.msg || rec.stage);
+      if (rec.error) setStatus('Error: ' + rec.error);
+      if (rec.done) {
+        setStatus('Ingest complete (GraphRAG builds running in background)');
+        await refreshSourceList();
+        await loadGraph();
+      }
+    }
+  }
+};
+
+document.querySelectorAll('input[name=scope]').forEach(r => r.onchange = async () => {
+  state.scope = document.querySelector('input[name=scope]:checked').value;
+  await loadGraph();
+});
+
+document.getElementById('modeSelect').onchange = (e) => {
+  document.getElementById('wholeFileToggle').style.display = e.target.value === 'whole_file' ? 'inline' : 'none';
+};
+
+// --- Chat ---
+function appendMsg(role, text) {
+  const div = document.createElement('div');
+  div.className = 'msg ' + role;
+  div.innerHTML = role === 'assistant' ? marked.parse(text) : text;
+  document.getElementById('chatlog').appendChild(div);
+  div.scrollIntoView({ block: 'end' });
+  return div;
+}
+
+let chatHistory = [];
+
+document.getElementById('btnClearChat').onclick = () => {
+  chatHistory = [];
+  document.getElementById('chatlog').innerHTML = '';
+};
+
+document.getElementById('chatform').onsubmit = async (e) => {
+  e.preventDefault();
+  const input = document.getElementById('chatInput');
+  const message = input.value.trim();
+  if (!message) return;
+  input.value = '';
+  appendMsg('user', message);
+  chatHistory.push({ role: 'user', content: message });
+
+  const mode = document.getElementById('modeSelect').value;
+  const promptLang = document.getElementById('langSelect').value;
+  const useClean = document.querySelector('input[name=wftext]:checked')?.value !== 'raw';
+  const assistantDiv = appendMsg('assistant', '...');
+  let acc = '';
+
+  const res = await fetch('/api/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      message, history: chatHistory, scope: state.scope, mode,
+      source_id: state.sourceId, use_clean: useClean, prompt_lang: promptLang,
+    }),
+  });
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    acc += decoder.decode(value, { stream: true });
+    assistantDiv.innerHTML = marked.parse(acc);
+    assistantDiv.scrollIntoView({ block: 'end' });
+  }
+  chatHistory.push({ role: 'assistant', content: acc });
+};
+
+// --- Knowledge graph (simple force-directed SVG layout) ---
+async function loadGraph() {
+  const params = new URLSearchParams({ scope: state.scope });
+  if (state.scope === 'video' && state.sourceId) params.set('source_id', state.sourceId);
+  if (state.scope === 'video' && !state.sourceId) { renderGraph({ nodes: [], edges: [] }); return; }
+  const res = await fetch('/api/graph?' + params.toString());
+  const g = await res.json();
+  document.getElementById('graphInfo').textContent = `${(g.nodes||[]).length} nodes, ${(g.edges||[]).length} edges`;
+  renderGraph(g);
+}
+
+function renderGraph(g) {
+  const svg = document.getElementById('graphsvg');
+  svg.innerHTML = '';
+  const nodes = (g.nodes || []).map((n, i) => ({ ...n, x: Math.random() * 600, y: Math.random() * 400, vx: 0, vy: 0 }));
+  const idx = new Map(nodes.map((n, i) => [n.id, i]));
+  const edges = (g.edges || []).filter(e => idx.has(e.source) && idx.has(e.target));
+
+  // crude force simulation, fixed iterations
+  for (let iter = 0; iter < 200; iter++) {
+    for (let i = 0; i < nodes.length; i++) {
+      for (let j = i + 1; j < nodes.length; j++) {
+        const a = nodes[i], b = nodes[j];
+        let dx = a.x - b.x, dy = a.y - b.y;
+        let dist = Math.sqrt(dx * dx + dy * dy) || 1;
+        const force = 800 / (dist * dist);
+        dx /= dist; dy /= dist;
+        a.vx += dx * force; a.vy += dy * force;
+        b.vx -= dx * force; b.vy -= dy * force;
+      }
+    }
+    for (const e of edges) {
+      const a = nodes[idx.get(e.source)], b = nodes[idx.get(e.target)];
+      let dx = b.x - a.x, dy = b.y - a.y;
+      let dist = Math.sqrt(dx * dx + dy * dy) || 1;
+      const force = (dist - 100) * 0.01;
+      dx /= dist; dy /= dist;
+      a.vx += dx * force; a.vy += dy * force;
+      b.vx -= dx * force; b.vy -= dy * force;
+    }
+    for (const n of nodes) {
+      n.x += n.vx * 0.5; n.y += n.vy * 0.5;
+      n.vx *= 0.85; n.vy *= 0.85;
+      n.x = Math.max(20, Math.min(620, n.x));
+      n.y = Math.max(20, Math.min(420, n.y));
+    }
+  }
+
+  svg.setAttribute('viewBox', '0 0 640 440');
+  for (const e of edges) {
+    const a = nodes[idx.get(e.source)], b = nodes[idx.get(e.target)];
+    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    line.setAttribute('class', 'edge');
+    line.setAttribute('x1', a.x); line.setAttribute('y1', a.y);
+    line.setAttribute('x2', b.x); line.setAttribute('y2', b.y);
+    svg.appendChild(line);
+  }
+  for (const n of nodes) {
+    const g_ = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    g_.setAttribute('class', 'node');
+    g_.setAttribute('transform', `translate(${n.x},${n.y})`);
+    const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    circle.setAttribute('r', 6);
+    g_.appendChild(circle);
+    const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    text.setAttribute('x', 9); text.setAttribute('y', 4);
+    text.textContent = n.label;
+    g_.appendChild(text);
+    g_.onclick = () => openWiki(n.id);
+    svg.appendChild(g_);
+  }
+}
+
+async function openWiki(conceptId) {
+  const params = new URLSearchParams({ scope: state.scope });
+  if (state.scope === 'video' && state.sourceId) params.set('source_id', state.sourceId);
+  const panel = document.getElementById('wikipanel');
+  const content = document.getElementById('wikicontent');
+  content.innerHTML = 'Loading...';
+  panel.classList.add('open');
+  const scopePath = state.scope === 'global' ? 'global' : 'video';
+  const res = await fetch(`/api/wiki/${scopePath}/${conceptId}?` + params.toString());
+  const data = await res.json();
+  content.innerHTML = data.markdown ? marked.parse(data.markdown) : ('Error: ' + (data.error || 'unknown'));
+}
+
+refreshSourceList();
+</script>
+</body>
+</html>
